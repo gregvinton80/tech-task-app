@@ -1,5 +1,5 @@
 # Building the binary of the App
-FROM golang:1.19 AS build
+FROM public.ecr.aws/docker/library/golang:1.19 AS build
 
 WORKDIR /go/src/wiz
 COPY . .
@@ -8,7 +8,7 @@ RUN go mod download
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /go/src/wiz/wiz
 
-FROM alpine:3.17.0 as release
+FROM public.ecr.aws/docker/library/alpine:3.17.0 AS release
 
 WORKDIR /app
 COPY --from=build /go/src/wiz/wiz .
