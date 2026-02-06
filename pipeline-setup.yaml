@@ -1,0 +1,401 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CI/CD Pipeline for Opportunities Tracker Application'
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: 'tech-task-app'
+    Description: 'GitHub repository name'
+  
+  GitHubOwner:
+    Type: String
+    Default: 'gregvinton80'
+    Description: 'GitHub repository owner'
+  
+  GitHubBranch:
+    Type: String
+    Default: 'main'
+    Description: 'GitHub branch to track'
+  
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: 'GitHub personal access token'
+  
+  EKSClusterName:
+    Type: String
+    Default: 'wiz-exercise-eks'
+    Description: 'EKS cluster name from infrastructure'
+  
+  ECRRepositoryName:
+    Type: String
+    Default: 'wiz-exercise-app'
+    Description: 'ECR repository name from infrastructure'
+
+Resources:
+  # S3 Bucket for Pipeline Artifacts
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'tech-task-app-artifacts-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # IAM Role for CodeBuild
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-CodeBuildRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser'
+      Policies:
+        - PolicyName: CodeBuildBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:GetBucketLocation'
+                  - 's3:ListBucket'
+                Resource:
+                  - !GetAtt PipelineArtifactsBucket.Arn
+                  - !Sub '${PipelineArtifactsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - 'eks:DescribeCluster'
+                  - 'eks:ListClusters'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:wiz-exercise/*'
+
+  # IAM Role for CodePipeline
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-CodePipelineRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CodePipelineBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:GetBucketLocation'
+                  - 's3:ListBucket'
+                Resource:
+                  - !GetAtt PipelineArtifactsBucket.Arn
+                  - !Sub '${PipelineArtifactsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - 'codebuild:BatchGetBuilds'
+                  - 'codebuild:StartBuild'
+                Resource: 
+                  - !GetAtt CodeBuildProject.Arn
+                  - !GetAtt DeployBuildProject.Arn
+
+  # CodeBuild Project for Building Docker Image
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-build'
+      Description: 'Build and push Docker image to ECR'
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/standard:7.0'
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ECRRepositoryName
+          - Name: IMAGE_TAG
+            Value: 'latest'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "Logging in to Amazon ECR..."
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+                - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+                - IMAGE_TAG=${COMMIT_HASH:=latest}
+                - echo "Building image with tag $IMAGE_TAG"
+            build:
+              commands:
+                - echo "Building Docker image..."
+                - docker build -t $REPOSITORY_URI:latest .
+                - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+            post_build:
+              commands:
+                - echo "Pushing Docker image to ECR..."
+                - docker push $REPOSITORY_URI:latest
+                - docker push $REPOSITORY_URI:$IMAGE_TAG
+                - echo "Writing image definitions file..."
+                - printf '[{"name":"wiz-app","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+                - cat imagedefinitions.json
+          artifacts:
+            files:
+              - imagedefinitions.json
+              - k8s/*
+      TimeoutInMinutes: 20
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+
+  # CodeBuild Project for Deploying to EKS
+  DeployBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-deploy'
+      Description: 'Deploy application to EKS cluster'
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: 'aws/codebuild/standard:7.0'
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: EKS_CLUSTER_NAME
+            Value: !Ref EKSClusterName
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ECRRepositoryName
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - echo "Installing kubectl..."
+                - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                - chmod +x kubectl
+                - mv kubectl /usr/local/bin/
+                - kubectl version --client
+            pre_build:
+              commands:
+                - echo "Configuring kubectl for EKS..."
+                - aws eks update-kubeconfig --region $AWS_DEFAULT_REGION --name $EKS_CLUSTER_NAME
+                - kubectl get nodes
+                - echo "Getting MongoDB credentials from Secrets Manager..."
+                - SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id wiz-exercise/mongodb/credentials --region $AWS_DEFAULT_REGION --query SecretString --output text)
+                - APP_PASSWORD=$(echo $SECRET_JSON | jq -r '.app_password')
+                - echo "Retrieving MongoDB IP from infrastructure..."
+                - MONGODB_IP=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=wiz-exercise-mongodb" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text --region $AWS_DEFAULT_REGION)
+                - echo "MongoDB IP is $MONGODB_IP"
+                - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+                - IMAGE_TAG=$(cat imagedefinitions.json | jq -r '.[0].imageUri' | cut -d':' -f2)
+                - echo "Deploying image tag $IMAGE_TAG"
+            build:
+              commands:
+                - echo "Updating Kubernetes manifests..."
+                - sed -i "s|ACCOUNT_ID|$AWS_ACCOUNT_ID|g" k8s/deployment.yaml
+                - sed -i "s|REGION|$AWS_DEFAULT_REGION|g" k8s/deployment.yaml
+                - sed -i "s|IMAGE_TAG|$IMAGE_TAG|g" k8s/deployment.yaml
+                - sed -i "s|MONGODB_IP|$MONGODB_IP|g" k8s/configmap.yaml
+                - sed -i "s|APP_PASSWORD|$APP_PASSWORD|g" k8s/configmap.yaml
+                - echo "Applying Kubernetes manifests..."
+                - kubectl apply -f k8s/namespace.yaml
+                - kubectl apply -f k8s/serviceaccount.yaml
+                - kubectl apply -f k8s/configmap.yaml
+                - kubectl apply -f k8s/deployment.yaml
+                - kubectl apply -f k8s/service.yaml
+                - kubectl apply -f k8s/ingress.yaml
+            post_build:
+              commands:
+                - echo "Waiting for deployment to complete..."
+                - kubectl rollout status deployment/wiz-app -n wiz-app --timeout=5m
+                - echo "Deployment complete!"
+                - kubectl get pods -n wiz-app
+                - kubectl get svc -n wiz-app
+                - kubectl get ingress -n wiz-app
+      TimeoutInMinutes: 15
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref DeployLogGroup
+
+  # CloudWatch Log Groups
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}-build'
+      RetentionInDays: 7
+
+  DeployLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${AWS::StackName}-deploy'
+      RetentionInDays: 7
+
+  # CodePipeline
+  ApplicationPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${AWS::StackName}-pipeline'
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactsBucket
+      Stages:
+        # Source Stage - GitHub
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              Configuration:
+                Owner: !Ref GitHubOwner
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceOutput
+        
+        # Build Stage - Build Docker Image
+        - Name: Build
+          Actions:
+            - Name: BuildImage
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+        
+        # Deploy Stage - Deploy to EKS
+        - Name: Deploy
+          Actions:
+            - Name: DeployToEKS
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref DeployBuildProject
+              InputArtifacts:
+                - Name: BuildOutput
+
+  # GitHub Webhook
+  PipelineWebhook:
+    Type: AWS::CodePipeline::Webhook
+    Properties:
+      Name: !Sub '${AWS::StackName}-github-webhook'
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken: !Ref GitHubToken
+      Filters:
+        - JsonPath: '$.ref'
+          MatchEquals: 'refs/heads/{Branch}'
+      TargetPipeline: !Ref ApplicationPipeline
+      TargetAction: SourceAction
+      TargetPipelineVersion: !GetAtt ApplicationPipeline.Version
+      RegisterWithThirdParty: true
+
+Outputs:
+  PipelineName:
+    Description: 'Name of the CodePipeline'
+    Value: !Ref ApplicationPipeline
+    Export:
+      Name: !Sub '${AWS::StackName}-PipelineName'
+
+  PipelineUrl:
+    Description: 'URL to the CodePipeline console'
+    Value: !Sub 'https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${ApplicationPipeline}/view?region=${AWS::Region}'
+
+  CodeBuildProjectName:
+    Description: 'Name of the CodeBuild project'
+    Value: !Ref CodeBuildProject
+    Export:
+      Name: !Sub '${AWS::StackName}-CodeBuildProject'
+
+  ArtifactsBucket:
+    Description: 'S3 bucket for pipeline artifacts'
+    Value: !Ref PipelineArtifactsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactsBucket'
+
+  NextSteps:
+    Description: 'Next steps after deployment'
+    Value: !Sub |
+      Pipeline deployed successfully!
+      
+      1. Pipeline will automatically trigger on GitHub push
+      
+      2. Monitor pipeline at:
+         ${ApplicationPipeline}
+      
+      3. View build logs in CloudWatch:
+         - Build: /aws/codebuild/${AWS::StackName}-build
+         - Deploy: /aws/codebuild/${AWS::StackName}-deploy
+      
+      4. Get application URL after deployment:
+         kubectl get ingress -n wiz-app
+      
+      5. View application logs:
+         kubectl logs -n wiz-app -l app=wiz-app --tail=100 -f
