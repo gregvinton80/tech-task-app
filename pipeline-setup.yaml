@@ -246,18 +246,12 @@ Resources:
                     
                     # Create ServiceAccount with IAM role annotation
                     echo "Creating ServiceAccount for AWS Load Balancer Controller..."
-                    cat <<EOF | kubectl apply -f -
-                    apiVersion: v1
-                    kind: ServiceAccount
-                    metadata:
-                      labels:
-                        app.kubernetes.io/component: controller
-                        app.kubernetes.io/name: aws-load-balancer-controller
-                      name: aws-load-balancer-controller
-                      namespace: kube-system
-                      annotations:
-                        eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/wiz-exercise-aws-load-balancer-controller
-                    EOF
+                    kubectl create serviceaccount aws-load-balancer-controller -n kube-system || true
+                    kubectl annotate serviceaccount aws-load-balancer-controller -n kube-system \
+                      eks.amazonaws.com/role-arn=arn:aws:iam::${AWS_ACCOUNT_ID}:role/wiz-exercise-aws-load-balancer-controller --overwrite
+                    kubectl label serviceaccount aws-load-balancer-controller -n kube-system \
+                      app.kubernetes.io/component=controller \
+                      app.kubernetes.io/name=aws-load-balancer-controller --overwrite
                     
                     # Download and configure AWS Load Balancer Controller
                     echo "Downloading AWS Load Balancer Controller manifest..."
