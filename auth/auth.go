@@ -5,13 +5,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gin-gonic/gin"
 )
 
 type Claims struct {
 	Username string `json:"username"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 var SECRET_KEY string = os.Getenv("SECRET_KEY")
@@ -47,8 +47,8 @@ func GenerateJWT(userid string) (string, error, time.Time) {
 	expirationTime := time.Now().Add(5 * time.Minute)
 	claims := &Claims{
 		Username: userid,
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: expirationTime.Unix(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
 		},
 	}
 
@@ -85,8 +85,8 @@ func RefreshToken(c *gin.Context) (bool, error, time.Time) {
 		}
 		return false, err, time.Time{}
 	}
-	if !tkn.Valid || time.Unix(claims.ExpiresAt, 0).Sub(time.Now()) > 30*time.Second {
-		return true, nil, time.Unix(claims.ExpiresAt, 0)
+	if !tkn.Valid || time.Until(claims.ExpiresAt.Time) > 30*time.Second {
+		return true, nil, claims.ExpiresAt.Time
 	}
-	return false, nil, time.Unix(claims.ExpiresAt, 0)
+	return false, nil, claims.ExpiresAt.Time
 }
