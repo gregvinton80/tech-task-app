@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Wiz Opportunities</title>
+	<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+	<img src="assets/img/wiz.svg" alt="Wiz Logo" class="logo">
+	<div class="container">
+		<div class="header">
+			<h1>Opportunities</h1>
+			<div class="user-info">
+				<span class="username" id="username"></span>
+				<button class="logout-btn" onclick="logout()">Logout</button>
+			</div>
+		</div>
+
+		<div class="input-section">
+			<input type="text" id="oppName" placeholder="Opportunity Name" />
+			<input type="number" id="oppValue" placeholder="Value ($)" step="0.01" />
+			<button class="add-btn" onclick="addOpportunity()">Add Opportunity</button>
+		</div>
+
+		<button class="clear-all-btn" onclick="clearAll()">Clear All</button>
+
+		<div class="opportunities-list" id="opportunitiesList">
+			<div class="empty-state">No opportunities yet. Add one above!</div>
+		</div>
+	</div>
+
+	<script src="assets/js/script.js"></script>
+</body>
+</html>

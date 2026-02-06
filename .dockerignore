@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+README.md
+DEMO.md
+SECURITY.md
+
+# Terraform
+terraform/
+
+# Kubernetes
+k8s/
+
+# CI/CD
+buildspec-app.yml
+buildspec-infra.yml
+.github/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Build artifacts
+wiz
+outputs.json
+terraform-outputs.json
+
+# Logs
+*.log

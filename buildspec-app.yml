@@ -1,0 +1,100 @@
+version: 0.2
+
+# Pipeline 2: Build, Scan, and Deploy Application
+# This buildspec builds the Docker image, scans it, pushes to ECR, and deploys to EKS
+
+phases:
+  install:
+    runtime-versions:
+      golang: 1.21
+      docker: 20
+    commands:
+      - echo "Installing security scanning tools..."
+      
+      # Install Trivy for container scanning
+      - wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | apt-key add -
+      - echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee -a /etc/apt/sources.list.d/trivy.list
+      - apt-get update
+      - apt-get install -y trivy
+      
+      # Install kubectl
+      - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+      - chmod +x kubectl
+      - mv kubectl /usr/local/bin/
+      
+      # Install AWS CLI v2
+      - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      - unzip awscliv2.zip
+      - ./aws/install --update
+
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      
+      - echo "Setting environment variables..."
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      
+      - echo "Running dependency security scan..."
+      - go list -json -m all | docker run --rm -i sonatypecommunity/nancy:latest sleuth || true
+
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - docker build -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+      
+      - echo "Scanning Docker image with Trivy..."
+      - trivy image --severity HIGH,CRITICAL --exit-code 0 $REPOSITORY_URI:latest
+      
+      - echo "Scanning for secrets in image..."
+      - trivy image --scanners secret --exit-code 0 $REPOSITORY_URI:latest
+      
+      - echo "Security scans complete. Pushing image to ECR..."
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      
+      - echo "Image pushed. ECR will perform additional scanning..."
+
+  post_build:
+    commands:
+      - echo "Configuring kubectl..."
+      - aws eks update-kubeconfig --region $AWS_DEFAULT_REGION --name $EKS_CLUSTER_NAME
+      
+      - echo "Getting MongoDB private IP from Terraform outputs..."
+      - MONGODB_IP=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=wiz-exercise-mongodb" "Name=instance-state-name,Values=running" --query "Reservations[0].Instances[0].PrivateIpAddress" --output text)
+      - echo "MongoDB IP: $MONGODB_IP"
+      
+      - echo "Updating Kubernetes manifests..."
+      - sed -i "s|ACCOUNT_ID|$AWS_ACCOUNT_ID|g" k8s/deployment.yaml
+      - sed -i "s|REGION|$AWS_DEFAULT_REGION|g" k8s/deployment.yaml
+      - sed -i "s|MONGODB_IP|$MONGODB_IP|g" k8s/configmap.yaml
+      
+      - echo "Deploying to Kubernetes..."
+      - kubectl apply -f k8s/namespace.yaml
+      - kubectl apply -f k8s/serviceaccount.yaml
+      - kubectl apply -f k8s/configmap.yaml
+      - kubectl apply -f k8s/deployment.yaml
+      - kubectl apply -f k8s/service.yaml
+      - kubectl apply -f k8s/ingress.yaml
+      
+      - echo "Waiting for deployment to complete..."
+      - kubectl rollout status deployment/wiz-app -n wiz-app --timeout=5m
+      
+      - echo "Getting application URL..."
+      - kubectl get ingress wiz-app-ingress -n wiz-app
+      
+      - echo "Deployment complete!"
+      - echo "Application URL will be available at the ALB endpoint above"
+
+artifacts:
+  files:
+    - k8s/**/*
+    - imagedefinitions.json
+
+cache:
+  paths:
+    - '/go/pkg/mod/**/*'
+    - '/root/.cache/trivy/**/*'
