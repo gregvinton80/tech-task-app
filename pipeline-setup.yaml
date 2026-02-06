@@ -98,6 +98,11 @@ Resources:
                 Action:
                   - 'secretsmanager:GetSecretValue'
                 Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:wiz-exercise/*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:DescribeTags'
+                Resource: '*'
 
   # IAM Role for CodePipeline
   CodePipelineServiceRole:
