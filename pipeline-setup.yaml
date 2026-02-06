@@ -268,6 +268,13 @@ Resources:
                     # Replace cluster name
                     sed -i.bak -e "s|your-cluster-name|$EKS_CLUSTER_NAME|" ./v2_14_1_full.yaml
                     
+                    # Get VPC ID for the cluster
+                    VPC_ID=$(aws eks describe-cluster --name $EKS_CLUSTER_NAME --region $AWS_DEFAULT_REGION --query 'cluster.resourcesVpcConfig.vpcId' --output text)
+                    echo "VPC ID: $VPC_ID"
+                    
+                    # Add VPC ID and region arguments to controller
+                    sed -i.bak -e "s|--ingress-class=alb|--ingress-class=alb\n        - --aws-vpc-id=$VPC_ID\n        - --aws-region=$AWS_DEFAULT_REGION|" ./v2_14_1_full.yaml
+                    
                     # Apply the controller
                     kubectl apply -f v2_14_1_full.yaml
                     
@@ -278,6 +285,11 @@ Resources:
                     # Wait for controller to be ready
                     echo "Waiting for AWS Load Balancer Controller to be ready..."
                     kubectl wait --for=condition=available --timeout=300s deployment/aws-load-balancer-controller -n kube-system
+                    
+                    # Wait for webhook endpoints to be ready
+                    echo "Waiting for webhook endpoints to be ready..."
+                    sleep 30
+                    kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=aws-load-balancer-controller -n kube-system --timeout=60s
                     
                     echo "AWS Load Balancer Controller installed successfully!"
                   else
