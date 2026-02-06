@@ -244,11 +244,26 @@ Resources:
                     kubectl wait --for=condition=available --timeout=300s deployment/cert-manager -n cert-manager
                     kubectl wait --for=condition=available --timeout=300s deployment/cert-manager-webhook -n cert-manager
                     
+                    # Create ServiceAccount with IAM role annotation
+                    echo "Creating ServiceAccount for AWS Load Balancer Controller..."
+                    cat <<EOF | kubectl apply -f -
+                    apiVersion: v1
+                    kind: ServiceAccount
+                    metadata:
+                      labels:
+                        app.kubernetes.io/component: controller
+                        app.kubernetes.io/name: aws-load-balancer-controller
+                      name: aws-load-balancer-controller
+                      namespace: kube-system
+                      annotations:
+                        eks.amazonaws.com/role-arn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/wiz-exercise-aws-load-balancer-controller
+                    EOF
+                    
                     # Download and configure AWS Load Balancer Controller
                     echo "Downloading AWS Load Balancer Controller manifest..."
                     curl -Lo v2_14_1_full.yaml https://github.com/kubernetes-sigs/aws-load-balancer-controller/releases/download/v2.14.1/v2_14_1_full.yaml
                     
-                    # Remove ServiceAccount section (IAM role already exists)
+                    # Remove ServiceAccount section (we created it above with IAM role)
                     sed -i.bak -e '764,772d' ./v2_14_1_full.yaml
                     
                     # Replace cluster name
