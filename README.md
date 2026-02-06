@@ -51,7 +51,7 @@ GitHub → CodePipeline → CodeBuild → ECR → EKS (Kubernetes)
 - kubectl installed
 - Terraform >= 1.0
 - Docker installed
-- Go 1.21+ (for local development)
+- Go 1.25+ (for local development)
 
 ## Quick Start
 
@@ -245,7 +245,7 @@ Monthly cost: ~$150-300 depending on usage.
 ## Tech Stack
 
 **Backend:**
-- Go 1.21
+- Go 1.25
 - Gin Web Framework
 - MongoDB 4.4
 - JWT for authentication

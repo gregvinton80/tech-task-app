@@ -1,5 +1,5 @@
 # Building the binary of the App
-FROM public.ecr.aws/docker/library/golang:1.19 AS build
+FROM public.ecr.aws/docker/library/golang:1.25 AS build
 
 WORKDIR /go/src/wiz
 COPY . .
