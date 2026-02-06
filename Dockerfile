@@ -8,7 +8,7 @@ RUN go mod download
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /go/src/wiz/wiz
 
-FROM public.ecr.aws/docker/library/alpine:3.17.0 AS release
+FROM public.ecr.aws/docker/library/alpine:3.23 AS release
 
 WORKDIR /app
 COPY --from=build /go/src/wiz/wiz .
