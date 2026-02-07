@@ -57,8 +57,14 @@ phases:
       - echo "Checking for high severity security issues..."
       - gosec -severity high -confidence medium ./... || true
       
+      - echo "Uploading gosec results to S3 for Security Hub integration..."
+      - aws s3 cp gosec-report.json s3://wiz-security-scan-results-039612851322/gosec/$(date +%Y%m%d-%H%M%S)-$CODEBUILD_BUILD_ID.json || true
+      
       - echo "Running dependency vulnerability scan with govulncheck..."
-      - govulncheck ./... || true
+      - govulncheck -json ./... > govulncheck-results.json || true
+      
+      - echo "Uploading govulncheck results to S3 for Security Hub integration..."
+      - aws s3 cp govulncheck-results.json s3://wiz-security-scan-results-039612851322/govulncheck/$(date +%Y%m%d-%H%M%S)-$CODEBUILD_BUILD_ID.json || true
 
   build:
     commands:
@@ -67,13 +73,19 @@ phases:
       - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
       
       - echo "Scanning Docker image with Trivy..."
-      - trivy image --severity HIGH,CRITICAL --exit-code 0 $REPOSITORY_URI:latest
+      - trivy image --severity HIGH,CRITICAL --format json --output trivy-image-results.json --exit-code 0 $REPOSITORY_URI:latest
+      
+      - echo "Uploading Trivy image scan results to S3 for Security Hub integration..."
+      - aws s3 cp trivy-image-results.json s3://wiz-security-scan-results-039612851322/trivy/$(date +%Y%m%d-%H%M%S)-image-$CODEBUILD_BUILD_ID.json || true
       
       - echo "Scanning for secrets in image..."
       - trivy image --scanners secret --exit-code 0 $REPOSITORY_URI:latest
       
       - echo "Scanning Kubernetes manifests with Trivy..."
-      - trivy config --severity HIGH,CRITICAL --exit-code 0 k8s/
+      - trivy config --severity HIGH,CRITICAL --format json --output trivy-k8s-results.json --exit-code 0 k8s/
+      
+      - echo "Uploading Trivy K8s scan results to S3 for Security Hub integration..."
+      - aws s3 cp trivy-k8s-results.json s3://wiz-security-scan-results-039612851322/trivy/$(date +%Y%m%d-%H%M%S)-k8s-$CODEBUILD_BUILD_ID.json || true
       
       - echo "Security scans complete. Pushing image to ECR..."
       - docker push $REPOSITORY_URI:latest
