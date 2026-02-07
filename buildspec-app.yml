@@ -48,6 +48,7 @@ phases:
       - IMAGE_TAG=${COMMIT_HASH:=latest}
       
       - echo "Downloading Go dependencies..."
+      - go mod tidy
       - go mod download
       
       - echo "Running Go SAST with gosec..."
