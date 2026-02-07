@@ -67,6 +67,10 @@ phases:
       - docker push $REPOSITORY_URI:latest
       - docker push $REPOSITORY_URI:$IMAGE_TAG
       
+      - echo "Creating image definitions file..."
+      - printf '[{"name":"wiz-app","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+      - cat imagedefinitions.json
+      
       - echo "Image pushed. ECR will perform additional scanning..."
 
   post_build:
@@ -74,13 +78,11 @@ phases:
       - echo "Configuring kubectl..."
       - aws eks update-kubeconfig --region $AWS_DEFAULT_REGION --name $EKS_CLUSTER_NAME
       
-      - echo "Getting MongoDB private IP from Terraform outputs..."
-      - >-
-        MONGODB_IP=$(aws ec2 describe-instances
-        --filters "Name=tag:Name,Values=wiz-exercise-mongodb" "Name=instance-state-name,Values=running"
-        --query "Reservations[0].Instances[0].PrivateIpAddress"
-        --output text)
-      - echo "MongoDB IP: $MONGODB_IP"
+      - echo "Getting MongoDB private IP from EC2..."
+      - export TAG_FILTER="Name=tag:Name,Values=wiz-exercise-mongodb"
+      - export STATE_FILTER="Name=instance-state-name,Values=running"
+      - MONGODB_IP=$(aws ec2 describe-instances --filters "$TAG_FILTER" "$STATE_FILTER" --query "Reservations[0].Instances[0].PrivateIpAddress" --output text)
+      - echo "MongoDB IP is $MONGODB_IP"
       
       - echo "Updating Kubernetes manifests..."
       - sed -i "s|ACCOUNT_ID|$AWS_ACCOUNT_ID|g" k8s/deployment.yaml
