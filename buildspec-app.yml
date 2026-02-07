@@ -32,6 +32,10 @@ phases:
       - echo "Installing gosec for Go security scanning..."
       - go install github.com/securego/gosec/v2/cmd/gosec@latest
       - export PATH=$PATH:$(go env GOPATH)/bin
+      
+      # Install govulncheck for dependency vulnerability scanning
+      - echo "Installing govulncheck for dependency scanning..."
+      - go install golang.org/x/vuln/cmd/govulncheck@latest
 
   pre_build:
     commands:
@@ -52,8 +56,8 @@ phases:
       - echo "Checking for high severity security issues..."
       - gosec -severity high -confidence medium ./... || true
       
-      - echo "Running dependency security scan with Nancy..."
-      - go list -json -m all | docker run --rm -i public.ecr.aws/sonatypecommunity/nancy:latest sleuth || true
+      - echo "Running dependency vulnerability scan with govulncheck..."
+      - govulncheck ./... || true
 
   build:
     commands:
@@ -66,6 +70,9 @@ phases:
       
       - echo "Scanning for secrets in image..."
       - trivy image --scanners secret --exit-code 0 $REPOSITORY_URI:latest
+      
+      - echo "Scanning Kubernetes manifests with Trivy..."
+      - trivy config --severity HIGH,CRITICAL --exit-code 0 k8s/
       
       - echo "Security scans complete. Pushing image to ECR..."
       - docker push $REPOSITORY_URI:latest
