@@ -7,7 +7,6 @@ phases:
   install:
     runtime-versions:
       golang: 1.25
-      docker: 20
     commands:
       - echo "Installing security scanning tools..."
       
